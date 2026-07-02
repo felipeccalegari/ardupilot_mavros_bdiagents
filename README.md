@@ -1,4 +1,4 @@
-# ArduPilot + MAVROS + JaCaMo Agents in Docker
+# ArduPilot + MAVROS + Jason Agents in Docker
 
 This repository provides a Docker-based ArduPilot simulation stack for developing
 and testing MAVROS-connected Jason BDI agents.

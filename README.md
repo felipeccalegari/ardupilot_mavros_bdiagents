@@ -1,142 +1,251 @@
-# ArduPilot SITL + MAVROS 2 Humble + Gazebo (Container)
+# ArduPilot + MAVROS + JaCaMo Agents in Docker
 
-This container is set up for the workflow you asked for:
+This repository provides a Docker-based ArduPilot simulation stack for developing
+and testing MAVROS-connected Jason BDI agents.
 
-- ROS 2 Humble
-- Gazebo Harmonic
-- ArduPilot SITL
-- MAVROS 2
-- `git`
-- Java 21
+The main idea is to run the robotics side in containers:
 
-## Compatibility review
+- Gazebo Harmonic + ArduPilot SITL + MAVProxy in one container
+- MAVROS 2 + rosbridge websocket in a second container
+- Jason agents from `Agents/tmp_repo/Agents/Mavros`, connected through
+  rosbridge and MAVROS services/topics
 
-After reviewing the official docs, there are two different integration paths that are easy to mix up:
+The stack is built around ROS 2 Humble, Gazebo Harmonic, ArduPilot SITL, MAVROS,
+rosbridge, Java 21, and Gradle.
 
-1. ArduPilot ROS 2 + Gazebo documentation is centered on the ArduPilot DDS / micro-ROS path.
-2. MAVROS is the MAVLink bridge path.
+## Repository Layout
 
-Those are compatible ideas, but they are not the same stack.
-
-The important result for this container is:
-
-- ArduPilot officially supports ROS 2 Humble.
-- ArduPilot's Gazebo guide recommends Gazebo Harmonic.
-- Gazebo's own docs say Humble + Harmonic is a non-default pairing and should be treated as an advanced setup.
-- MAVROS on Humble is supported.
-- The ArduPilot Gazebo bringup code contains a non-DDS path using `use_dds_agent:=False`, which is the cleaner fit for a MAVROS-first workflow.
-
-Because of that, this setup is intentionally biased toward:
-
-- building the ArduPilot Gazebo workspace during `docker compose build`,
-- disabling DDS for the `ardupilot_sitl` build,
-- launching native `ardupilot_gazebo` server + GUI + SITL when the container starts,
-- and starting MAVROS plus rosbridge automatically in a second compose service over MAVLink/UDP.
-
-That avoids forcing `Micro-XRCE-DDS-Gen` into the image just to support a workflow you did not ask for.
-
-## Why the earlier build failed
-
-The earlier Dockerfile tried to compile `Micro-XRCE-DDS-Gen` from source inside the image. That pulled in a separate Java / Gradle compatibility problem unrelated to MAVROS itself.
-
-For a MAVROS-based setup, that dependency is unnecessary noise, so it has been removed from the default container path.
-
-## Host assumptions
-
-This is aimed at a Linux host with Docker Engine and X11.
-
-For GUI access:
-
-```bash
-xhost +local:docker
+```text
+.
+|-- Dockerfile
+|-- docker-compose.yml
+|-- container-startup.sh
+|-- start-mavros.sh
+`-- Agents/
+    `-- tmp_repo/Agents/Mavros/
+        |-- build.gradle
+        |-- gradlew
+        |-- perception_action.jcm
+        `-- src/agt/sample_agent.asl
 ```
 
-## Build
+## Build the Docker Image
+
+From the repository root:
 
 ```bash
 cd /home/felipe/tmp1/ardupilot_mavros_docker
 docker compose build
 ```
 
-## Start the stack
+
+## Start the Containers
+
+Allow Docker containers to use the host X11 display:
+
+```bash
+xhost +local:docker
+```
+
+Then start the full stack:
 
 ```bash
 docker compose up -d
 ```
 
-This starts:
+This starts two containers:
 
-- `ardupilot_humble_gz`: Gazebo server, Gazebo GUI, ArduPilot SITL, MAVProxy
-- `ardupilot_humble_mavros`: MAVROS 2 and rosbridge websocket
-
-## Verify basics
-
-```bash
-docker exec -it ardupilot_humble_gz bash
+```text
+ardupilot_humble_gz   ->   Gazebo, ArduPilot SITL, MAVProxy
+ardupilot_humble_mavros -> MAVROS 2, rosbridge websocket
 ```
 
-Then inside:
+## Check Logs
 
-```bash
-java -version
-git --version
-gz sim --version
-ros2 pkg list | grep mavros
-```
-
-## Logs
+Gazebo/SITL/MAVProxy:
 
 ```bash
 docker compose logs -f ardupilot_humble_gz
+```
+
+MAVROS/rosbridge:
+
+```bash
 docker compose logs -f mavros
 ```
 
-## Shell access
+## Open Shells in the Containers
 
-Gazebo / SITL container:
+Use the Gazebo/SITL container for simulator-side commands:
 
 ```bash
 docker exec -it ardupilot_humble_gz bash
 ```
 
-MAVROS container:
+Use the MAVROS container for ROS 2, MAVROS, rosbridge, and agent commands:
 
 ```bash
 docker exec -it ardupilot_humble_mavros bash
 ```
 
-Rosbridge websocket in the merged MAVROS container is exposed on host port `9090` by default.
+The repository's `Agents/` directory is mounted at `/Agents` in both containers.
 
-## What Docker now does automatically
+## Using MAVROS Commands
 
-During image build:
+Run MAVROS commands inside the MAVROS container:
 
-- imports the `ardupilot_gz` workspace
-- runs `rosdep install`
-- builds `ardupilot_sitl` with `-DARDUPILOT_ENABLE_DDS=OFF`
-- builds `ardupilot_gz_bringup`
+```bash
+docker exec -it ardupilot_humble_mavros bash
+```
 
-During `docker compose up`:
+Useful checks:
 
-- launches `gz sim -v4 -s -r iris_runway.sdf`
-- launches `gz sim -v4 -g`
-- launches `arducopter --model json ...`
-- launches MAVProxy with UDP output on `14550`
-- launches `mavros_node` and `rosbridge_websocket` in a companion service
+```bash
+ros2 node list
+ros2 topic list | grep mavros
+ros2 service list | grep mavros
+ros2 topic echo /mavros/state
+ros2 topic echo /mavros/local_position/pose
+```
+* It's recommended to wait ~40-50 seconds before testing any command due to Ardupilot/MAVROS initialization.
+
+Typical control sequence:
+
+```bash
+ros2 service call /mavros/set_mode mavros_msgs/srv/SetMode \
+  "{base_mode: 0, custom_mode: 'GUIDED'}"
+
+ros2 service call /mavros/cmd/arming mavros_msgs/srv/CommandBool \
+  "{value: true}"
+
+ros2 service call /mavros/cmd/takeoff mavros_msgs/srv/CommandTOL \
+  "{min_pitch: 0.0, yaw: 0.0, latitude: 0.0, longitude: 0.0, altitude: 3.0}"
+```
+
+Land the vehicle:
+
+```bash
+ros2 service call /mavros/set_mode mavros_msgs/srv/SetMode \
+  "{base_mode: 0, custom_mode: 'LAND'}"
+```
+
+MAVROS connects directly to ArduPilot SITL through TCP port `14540`.
+MAVProxy owns the separate GCS fanout and publishes UDP outputs on `14550` and
+`14551`.
+
+## Running the Agents
+
+The agent project is here:
+
+```bash
+/Agents/tmp_repo/Agents/Mavros
+```
+
+Run it from the MAVROS container, after the stack is up and MAVROS/rosbridge are
+running:
+
+```bash
+docker exec -it ardupilot_humble_mavros bash
+cd /Agents/tmp_repo/Agents/Mavros
+./gradlew run
+```
+* Additionally, if ```./gradlew run``` won't work directly, try ```chmod +x gradlew``` command in the ```/Agents/tmp_repo/Agents/Mavros``` directory, and then proceed to run the agents.
+
+
+The default Gradle task launches:
+
+```text
+perception_action.jcm
+```
+
+That JCM starts `sample_agent`, whose source is:
+
+```text
+src/agt/sample_agent.asl
+```
+
+The agent is configured by:
+
+```text
+src/agt/sample_agent.yaml
+```
+
+The YAML maps MAVROS topics into beliefs, including:
+
+- `/mavros/state`
+- `/mavros/battery`
+- `/mavros/rc/in`
+- `/mavros/local_position/pose`
+- `/mavros/global_position/global`
+- `/mavros/param/event`
+
+It also maps agent actions to MAVROS services, including:
+
+- `arming` -> `/mavros/cmd/arming`
+- `takeoff_cmd` -> `/mavros/cmd/takeoff`
+- `set_mode` -> `/mavros/set_mode`
+- `mission_clear` -> `/mavros/mission/clear`
+- `mission_set_current` -> `/mavros/mission/set_current`
+- `set_stream_rate` -> `/mavros/set_stream_rate`
+- `set_message_interval` -> `/mavros/set_message_interval`
+
+The current `sample_agent.asl` contains a GUIDED-mode body-relative movement
+demo. It switches to GUIDED, arms, takes off, sends local setpoints, and then
+lands.
+
+## Ports and Connections
+
+Important runtime connections:
+
+```text
+TCP 14540   ArduPilot SITL SERIAL1, used directly by MAVROS
+TCP 5760    ArduPilot SITL SERIAL0, used by MAVProxy
+UDP 14550   MAVProxy GCS output
+UDP 14551   MAVProxy GCS output
+TCP 9090    rosbridge websocket
+```
+
+The agent YAML uses:
+
+```text
+ws://localhost:9090
+```
+
+Because the containers use host networking, this works from the MAVROS
+container.
+
+## Useful Maintenance Commands
+
+Stop the stack:
+
+```bash
+docker compose down
+```
+
+Restart only MAVROS/rosbridge:
+
+```bash
+docker compose restart mavros
+```
+
+Restart the simulator stack:
+
+```bash
+docker compose restart ardupilot_humble_gz mavros
+```
+
+Check container status:
+
+```bash
+docker compose ps
+```
 
 ## Notes
 
-- If you want the ArduPilot DDS / micro-ROS path later, that is a separate setup concern from MAVROS.
-- The ArduPilot docs do provide a Docker route for the DDS-oriented ROS environment, but the main Linux build docs still caution that Docker is not their preferred path for graphical SITL unless you add graphics plumbing.
-- This container already includes the graphics plumbing needed for Gazebo GUI on a Linux desktop.
-
-## Sources
-
-- ArduPilot ROS 2 install: https://ardupilot.org/dev/docs/ros2.html
-- ArduPilot ROS 2 with SITL: https://ardupilot.org/dev/docs/ros2-sitl.html
-- ArduPilot ROS 2 with Gazebo: https://ardupilot.org/dev/docs/ros2-gazebo.html
-- ArduPilot Linux build environment / Docker note: https://ardupilot.org/dev/docs/building-setup-linux.html
-- Official ArduPilot ROS Dockerfile repo: https://github.com/ArduPilot/ardupilot_dev_docker
-- `ardupilot_gz` repo: https://github.com/ArduPilot/ardupilot_gz
-- Gazebo Harmonic + ROS compatibility: https://gazebosim.org/docs/harmonic/ros_installation/
-- MAVROS Humble docs: https://docs.ros.org/en/humble/p/mavros/
+- Use `ardupilot_humble_gz` for Gazebo, SITL, and MAVProxy debugging.
+- Use `ardupilot_humble_mavros` for `ros2`, MAVROS service/topic commands,
+  rosbridge checks, and `./gradlew run`.
+- MAVROS waits for SITL and then delays startup using `STABILIZE_SECS`, default
+  `40`, before launching - delay was necessary otherwise system wouldn't launch properly.
+- rosbridge is exposed on port `9090`.
+- Java 21 is installed in the image for the Jason agent project.

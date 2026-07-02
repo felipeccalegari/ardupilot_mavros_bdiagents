@@ -105,9 +105,30 @@ ros2 node list
 ros2 topic list | grep mavros
 ros2 service list | grep mavros
 ros2 topic echo /mavros/state
-ros2 topic echo /mavros/local_position/pose
+ros2 topic info /mavros/local_position/pose
 ```
 * It's recommended to wait ~40-50 seconds before testing any command due to Ardupilot/MAVROS initialization.
+
+Some MAVROS topics are command inputs, not telemetry outputs. For example,
+`/mavros/setpoint_position/local` is subscribed to by MAVROS and is only printed
+by `ros2 topic echo` when another node is actively publishing setpoints to it.
+The agent's `setpoint_local(...)` action is one source of those messages.
+
+Local-position telemetry can also be quiet until ArduPilot is streaming position
+messages. The sample agent requests that stream with `set_stream_rate(6, 5,
+true)`. Manually, you can request it with:
+
+```bash
+ros2 service call /mavros/set_stream_rate mavros_msgs/srv/StreamRate \
+  "{stream_id: 6, message_rate: 5, on_off: true}"
+```
+
+Then inspect local pose or odometry:
+
+```bash
+ros2 topic echo --qos-reliability best_effort /mavros/local_position/pose
+ros2 topic echo --qos-reliability best_effort /mavros/local_position/odom
+```
 
 Typical control sequence:
 
@@ -189,8 +210,7 @@ It also maps agent actions to MAVROS services, including:
 - `set_stream_rate` -> `/mavros/set_stream_rate`
 - `set_message_interval` -> `/mavros/set_message_interval`
 
-The current `sample_agent.asl` contains a GUIDED-mode body-relative movement
-demo. It switches to GUIDED, arms, takes off, sends local setpoints, and then
+The current `sample_agent.asl` contains multiple (commented) examples that works alongside Ardupilot, including a GUIDED-mode body-relative movement (uncommented). It switches to GUIDED, arms, takes off, sends local setpoints (based on where it's currently located, not it's origin), and then
 lands.
 
 ## Ports and Connections

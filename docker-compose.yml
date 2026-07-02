@@ -1,0 +1,51 @@
+services:
+
+  ardupilot_humble_gz:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ardupilot_humble_gz:latest
+    container_name: ardupilot_humble_gz
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_QPA_PLATFORM=xcb
+      - GZ_VERSION=harmonic
+      - ROS_DOMAIN_ID=0
+      - START_GZ_GUI=${START_GZ_GUI:-1}
+      - LIBVA_DRIVER_NAME=
+      - GZ_IP=127.0.0.1
+      # Allow EGL to fall back to surfaceless/software path when DRI2 fails
+      - LIBGL_DRI3_DISABLE=1
+      - EGL_PLATFORM=surfaceless
+      # Never let llvmpipe take over the whole pipeline
+      - LIBGL_ALWAYS_SOFTWARE=0
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${HOME}/.Xauthority:/root/.Xauthority:ro
+      - ./Agents:/Agents:rw
+    devices:
+      - /dev/dri:/dev/dri
+    working_dir: /workspaces/ardu_ws
+    command: ["/usr/local/bin/container-startup.sh"]
+
+  mavros:
+    image: ardupilot_humble_gz:latest
+    container_name: ardupilot_humble_mavros
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - ardupilot_humble_gz
+    environment:
+      - ROS_DOMAIN_ID=0
+      - DISPLAY=${DISPLAY}
+      - STABILIZE_SECS=${STABILIZE_SECS:-40}
+      - SITL_PORT=${SITL_PORT:-14540}
+      - ROSBRIDGE_WS_PORT=${ROSBRIDGE_WS_PORT:-9090}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${HOME}/.Xauthority:/root/.Xauthority:ro
+      - ./Agents:/Agents:rw
+    working_dir: /workspaces/ardu_ws
+    command: ["/usr/local/bin/start-mavros.sh"]
